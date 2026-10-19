@@ -1,0 +1,5 @@
+-- ============================================================================
+-- VenueFlow - Views & Specialized Indexes
+-- ============================================================================
+-- Views: show_occupancy_view, revenue_by_event_view, manager_dashboard_view
+-- Indexes: B-tree, Partial unique index on active holds, GIN full-text index

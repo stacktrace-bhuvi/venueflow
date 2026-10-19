@@ -1,0 +1,6 @@
+-- ============================================================================
+-- VenueFlow - DDL ALTER & DROP Demonstration Script
+-- ============================================================================
+-- This script safely demonstrates DDL operations (ALTER TABLE, ADD COLUMN,
+-- DROP COLUMN, ADD CONSTRAINT, DROP TABLE) in an isolated sandbox table
+-- so as not to break or alter the core production schema.

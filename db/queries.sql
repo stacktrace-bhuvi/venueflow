@@ -1,0 +1,5 @@
+-- ============================================================================
+-- VenueFlow - Analytical & Complex Queries
+-- ============================================================================
+-- Contains commented queries demonstrating JOIN, GROUP BY, HAVING, ORDER BY,
+-- aggregate functions, window functions, and correlated subqueries.

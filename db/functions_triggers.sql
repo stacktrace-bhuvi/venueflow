@@ -1,0 +1,8 @@
+-- ============================================================================
+-- VenueFlow - Stored Functions & Triggers
+-- ============================================================================
+-- 1. calculate_dynamic_price(p_show_id)
+-- 2. trigger_prevent_past_show_booking()
+-- 3. trigger_sync_seat_status_on_booking()
+-- 4. trigger_waitlist_promotion_on_cancellation()
+-- 5. trigger_audit_log()
