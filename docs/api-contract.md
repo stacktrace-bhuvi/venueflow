@@ -397,37 +397,123 @@
 ## 7. Manager Endpoints (`/api/manager/**`)
 
 - **Auth:** Authenticated (`manager`, `admin`)
-- Role Guard: Managers can only read and mutate events/shows/pricing rules belonging to their assigned venues.
+- Role Guard: Managers can only read and mutate events/shows/venues belonging to their account.
 
-### 7.1 Create Event
+### 7.1 Create Venue
+- **Endpoint:** `POST /api/manager/venues`
+- **Request Body:**
+```json
+{
+  "name": "Kanteerava Indoor Arena",
+  "address": "Kasturba Road",
+  "city": "Bengaluru",
+  "state": "Karnataka",
+  "postalCode": "560001",
+  "totalCapacity": 100,
+  "sections": [
+    {
+      "name": "VIP",
+      "baseMultiplier": 1.5,
+      "capacity": 20,
+      "rows": ["A", "B"],
+      "seatsPerRow": 10
+    }
+  ]
+}
+```
+- **Response (`201 Created`):** Returns created venue and generated section/seat details.
+
+### 7.2 Update Venue
+- **Endpoint:** `PATCH /api/manager/venues/:id`
+- **Request Body:** Partial venue fields (`name`, `address`, `city`, `state`, `postalCode`, `totalCapacity`).
+
+### 7.3 Create Seating Section & Physical Seats
+- **Endpoint:** `POST /api/manager/venues/:id/sections`
+- **Request Body:**
+```json
+{
+  "name": "PREMIUM",
+  "baseMultiplier": 1.25,
+  "capacity": 30,
+  "rows": ["C", "D", "E"],
+  "seatsPerRow": 10
+}
+```
+- **Response (`201 Created`):** Returns created section ID and count of physical seats generated.
+
+### 7.4 Schedule Show for Event
+- **Endpoint:** `POST /api/manager/shows`
+- **Request Body:**
+```json
+{
+  "eventId": 1,
+  "venueId": 1,
+  "startTime": "2026-12-01T19:00:00Z",
+  "endTime": "2026-12-01T22:00:00Z",
+  "basePrice": 3500.00,
+  "pricingRules": {
+    "minPrice": 2800.00,
+    "maxPrice": 7500.00,
+    "demandFactorWeight": 0.40,
+    "viewWeight": 0.05,
+    "abandonWeight": 0.08
+  }
+}
+```
+- **Response (`201 Created`):** Returns scheduled show and count of `show_seats` instantiated.
+
+### 7.5 Create Event
 - **Endpoint:** `POST /api/manager/events`
 - **Request Body:** Event details, description, venueId, shows array.
 
-### 7.2 Configure Dynamic Pricing Rules
+### 7.6 Configure Dynamic Pricing Rules
 - **Endpoint:** `PATCH /api/manager/pricing-rules/:id`
 - **Request Body:**
 ```json
 {
   "minPrice": 2500.00,
   "maxPrice": 8000.00,
-  "demandMultiplier": 1.25,
+  "demandFactorWeight": 0.45,
   "viewWeight": 0.05,
   "searchWeight": 0.10,
   "abandonWeight": 0.08
 }
 ```
 
-### 7.3 Manager Analytics Dashboard
+### 7.7 Manager Analytics Dashboard
 - **Endpoint:** `GET /api/analytics/manager`
-- **Query Params:** `venueId`, `timeRange` (e.g. `7d`, `30d`)
-- **Response (`200 OK`):** Show occupancy percentages, dynamic pricing yield, revenue by show, waitlist conversion rates.
+- **Response (`200 OK`):** Venues summary from `manager_dashboard_view` and shows occupancy from `show_occupancy_view`.
 
 ---
 
-## 8. Admin Oversight Endpoints (`/api/analytics/admin`, `/api/admin/**`)
+## 8. Admin Oversight Endpoints (`/api/admin/**`, `/api/analytics/admin`)
 
 - **Auth:** Authenticated (`admin` only)
-- System-wide occupancy views, user management, audit logs, and trigger execution status.
+
+### 8.1 List & Filter Users
+- **Endpoint:** `GET /api/admin/users`
+- **Query Params:** `role` (`customer`, `manager`, `admin`), `q` (name/email search)
+- **Response (`200 OK`):** List of users with booking statistics and total spent.
+
+### 8.2 Update User Role
+- **Endpoint:** `PATCH /api/admin/users/:id`
+- **Request Body:** `{ "role": "manager" }`
+
+### 8.3 Oversight: Venues
+- **Endpoint:** `GET /api/admin/venues`
+- **Response (`200 OK`):** All venues platform-wide, assigned managers, and show/section counts.
+
+### 8.4 Oversight: Events
+- **Endpoint:** `GET /api/admin/events`
+- **Response (`200 OK`):** All events platform-wide with organizer info, show counts, and status.
+
+### 8.5 Toggle Event Status
+- **Endpoint:** `PATCH /api/admin/events/:id`
+- **Request Body:** `{ "isActive": false }`
+
+### 8.6 Admin System Analytics
+- **Endpoint:** `GET /api/analytics/admin`
+- **Response (`200 OK`):** System-wide financial metrics, demographics by role, `revenue_by_event_view`, and recent `audit_log` records.
 
 ---
 

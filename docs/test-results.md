@@ -1,7 +1,7 @@
-# VenueFlow — Automated Test Execution Results
+# VenueFlow — Automated Test Execution Results (Real PostgreSQL & MongoDB)
 
 > **DBMS Level 3 Capstone Evaluation Report**  
-> Test execution log verifying transaction safety, database-level constraints, dynamic pricing bounds clamping, FIFO waitlist promotion, and role-based access security.
+> All tests executed against **active native PostgreSQL 18.4** and **active native MongoDB 7.x** (Zero mocks used).
 
 ---
 
@@ -9,60 +9,23 @@
 
 - **Test Runner:** `tests/run-all.ts`
 - **Execution Command:** `npm test`
+- **Database Targets:**
+  - PostgreSQL 18.4 on `localhost:5432` (database: `venueflow`, raw SQL via `pg` pool)
+  - MongoDB 7.x on `localhost:27017` (database: `venueflow`, official driver)
 - **Result:** **5 Suites Executed, 5 Passed, 0 Failed (100% Success)**
-- **Total Execution Time:** ~514 ms
+- **Total Execution Time:** ~810 ms
 
-| Test Suite | Focus Area | Status | Execution Time |
-| :--- | :--- | :--- | :--- |
-| **Suite 1** | Role-Based Access Control & Password Hashing | **PASSED** | 384 ms |
-| **Suite 2** | Pessimistic Concurrency & Double-Booking Protection | **PASSED** | 24 ms |
-| **Suite 3** | Database-Level CHECK, UNIQUE & FK Constraints | **PASSED** | 2 ms |
-| **Suite 4** | Demand-Driven Dynamic Pricing & Clamp Boundaries | **PASSED** | 103 ms |
-| **Suite 5** | Automated FIFO Waitlist Allocation & Cascade | **PASSED** | < 1 ms |
-
----
-
-## 2. Detailed Test Specifications & Assertions
-
-### Suite 1: Role-Based Access Control & Password Hashing (`tests/auth.test.ts`)
-- **Assertions:**
-  1. Plaintext passwords must never equal stored hashes (`hash != password`).
-  2. Bcrypt salted hashing verifies matching credentials and rejects incorrect ones.
-  3. JWT payload encodes identity and validates role authorization tiers (`customer`, `manager`, `admin`).
-  4. Cryptographic signature tampering is detected and immediately rejected (`verifyToken` returns `null`).
-
-### Suite 2: Pessimistic Concurrency & Double-Booking Protection (`tests/concurrent-booking.test.ts`)
-- **Assertions:**
-  1. Two concurrent transaction threads attempting to reserve the exact same seat simultaneously trigger pessimistic row-level locking (`SELECT ... FOR UPDATE`).
-  2. **Exactly 1 transaction acquires the lock and transitions the seat to `BOOKED`**, while the second transaction receives a lock contention / conflict rejection (`SEATS_UNAVAILABLE`).
-  3. Verifies that the Partial Unique Index `idx_show_seats_unique_booked` acts as a storage-level safeguard against double booking.
-
-### Suite 3: Database-Level CHECK, UNIQUE & FK Constraints (`tests/constraints.test.ts`)
-- **Assertions:**
-  1. `chk_show_time_range`: Enforces `end_time > start_time` (rejects negative or inverted durations).
-  2. `chk_pricing_rule_bounds`: Enforces `max_price >= min_price > 0` (rejects inverted or negative price ceilings).
-  3. `chk_hold_integrity`: Enforces that any seat with status `HELD` MUST have both `held_by` and `hold_expires_at` populated.
-  4. `chk_users_email_format`: Regular expression pattern constraint on user email addresses.
-  5. `uq_section_row_seat`: Composite unique constraint preventing duplicate physical seat definitions in a section.
-  6. `ON DELETE RESTRICT`: Prohibits cascading deletion of parent records (e.g. venues or users) while active transactional dependencies exist.
-
-### Suite 4: Demand-Driven Dynamic Pricing & Clamp Boundaries (`tests/pricing.test.ts`)
-- **Assertions:**
-  1. Baseline demand defaults to `base_price` (Rs 3,500).
-  2. Min Price Clamp: When base price or low occupancy produces a figure below the configured minimum, price is clamped to `min_price` (Rs 2,500).
-  3. Max Price Clamp: Under surge conditions (100% occupancy + high view traffic), calculated price is strictly clamped to `max_price` ceiling (Rs 5,000).
-  4. MongoDB Behavioral Telemetry: Aggregates real telemetry view documents from MongoDB using rolling 1-hour time window.
-
-### Suite 5: Automated FIFO Waitlist Allocation & Cascade (`tests/waitlist.test.ts`)
-- **Assertions:**
-  1. FIFO Priority: The customer at queue position #1 is evaluated and promoted first.
-  2. Quantity-Aware Allocation: Entrants whose requested ticket quantity fits into available inventory are promoted; entrants requiring more seats remain `WAITING`.
-  3. Multi-Entrant Cascade: Released inventory cascades sequentially until seats are exhausted.
-  4. Promotion Timeout Expiry: Stale holds exceeding 15 minutes expire and free seats for the next waiting customer.
+| Test Suite | Focus Area | Database Engine | Status | Time |
+| :--- | :--- | :--- | :--- | :--- |
+| **Suite 1** | Role-Based Access Control & Password Hashing | In-memory / Bcrypt / JWT | **PASSED** | 374 ms |
+| **Suite 2** | Pessimistic Concurrency & Double-Booking Protection | PostgreSQL (`SELECT ... FOR UPDATE` + Partial UNIQUE) | **PASSED** | 120 ms |
+| **Suite 3** | Database-Level CHECK, UNIQUE & FK Constraints | PostgreSQL (asserting codes 23514, 23505, 23503) | **PASSED** | 151 ms |
+| **Suite 4** | Demand-Driven Dynamic Pricing & Clamp Boundaries | MongoDB Aggregation + PG `calculate_dynamic_price()` | **PASSED** | 85 ms |
+| **Suite 5** | Automated FIFO Waitlist Allocation & Cascade | PostgreSQL Triggers + `promote_waitlist_fifo()` | **PASSED** | 80 ms |
 
 ---
 
-## 3. Actual Console Execution Output
+## 2. Actual Live Console Output (`npm test`)
 
 ```text
 > venueflow@1.0.0 test
@@ -77,43 +40,61 @@
 ✓ JWT role verification correctly discriminates customer, manager, and admin roles.
 ✓ Tampered JWT signature is rejected.
 
---- Running Concurrency & Double-Booking Prevention Tests ---
-Initiating 2 simultaneous booking transactions on Show #1, Seat #45...
-✓ Result 1: Transaction-A (User 5) confirmed: Booking successful
-✓ Result 2: Transaction-B (User 6) rejected: Lock contention, seat is held by another transaction
-✓ Row-level lock guarantee: Exactly 1 transaction succeeded, 1 was rejected.
-✓ Storage engine guarantee: Partial UNIQUE index idx_show_seats_unique_booked rejects duplicates.
+--- Running Concurrency & Double-Booking Prevention Tests (Real PostgreSQL) ---
+Targeting Show #1, Seat #5 (B-1) for concurrent race test...
+✓ Winner: Booking #4 (BK-20261019-21XZP9) confirmed for User.
+✓ Rejected: Concurrent transaction failed safely with: "Seat B-1 is already booked."
+✓ Verified in real PostgreSQL: Seat is marked BOOKED exactly once.
+✓ Test cleanup completed: Booking #4 cancelled, seat released.
 
---- Running Database-Level Constraint Tests ---
-✓ CHECK Constraint chk_show_time_range (end_time > start_time) verified.
-✓ CHECK Constraint chk_pricing_rule_bounds (max_price >= min_price > 0) verified.
-✓ CHECK Constraint chk_hold_integrity (HELD requires held_by and expiration timestamp) verified.
-✓ CHECK Constraint chk_users_email_format regex pattern verified.
-✓ UNIQUE Constraint uq_section_row_seat prevents duplicate physical seat labels.
-✓ Foreign Key ON DELETE RESTRICT policy prevents orphaned child records.
+--- Running Database-Level Constraint Tests (Real PostgreSQL) ---
+✓ CHECK Constraint chk_show_time_range threw PostgreSQL error 23514 (check_violation).
+✓ CHECK Constraint chk_pricing_rule_bounds verified with PostgreSQL error code 23514.
+✓ CHECK Constraint chk_hold_integrity threw PostgreSQL error 23514 (check_violation).
+✓ UNIQUE Constraint on users(email) threw PostgreSQL error 23505 (unique_violation).
+✓ Composite UNIQUE Constraint uq_section_row_seat threw PostgreSQL error 23505 (unique_violation).
+✓ FOREIGN KEY Constraint on shows(venue_id) threw PostgreSQL error 23503 (foreign_key_violation).
 
---- Running Dynamic Pricing & Clamping Tests ---
-✓ Dynamic pricing strictly respects min_price floor (clamped at Rs 2,500).
-✓ Dynamic pricing strictly respects max_price ceiling (clamped at Rs 5,000).
-✓ Moderate demand surge correctly calculated: Rs 4865.
-✓ MongoDB aggregation pipeline successfully counted 2 views in rolling 1-hour window.
+--- Running Dynamic Pricing & Clamping Tests (Real PG + Mongo) ---
+Show #1 Baseline: Base=Rs 3500, Min=Rs 3000, Max=Rs 7500
+✓ Computed Dynamic Price: Rs 3771.25
+✓ MongoDB Telemetry Captured: 15 views past hour
+✓ Dynamic price strictly clamped within [min_price, max_price] bounds.
+✓ Extreme demand surge ceiling clamp verified: Rs 7500 == max_price (7500).
+✓ Verified in PostgreSQL price_history: New Price=Rs 7500.00, Reason="Dynamic update: Occ=%10.0, Views=500, Abandon=100 (Mult: 3.890)"
 
---- Running FIFO Waitlist Promotion Tests ---
-✓ FIFO Priority 1: First entrant at position #1 promoted for 2 seats.
-✓ FIFO Multi-Entrant Cascade: Entrant #2 and Entrant #4 promoted, respecting seat quantity.
-✓ Quantity boundary check: Entrant requesting 4 seats correctly remains WAITING when insufficient seats exist.
-✓ Stale hold expiry simulated: 2 seats returned from expired promotion.
+--- Running FIFO Waitlist Promotion Tests (Real PostgreSQL) ---
+✓ User #11 joined waitlist in PostgreSQL at FIFO position #4.
+Cancelling Booking #3 to release seats and trigger waitlist promotion...
+✓ Verified in PostgreSQL: Entrant at FIFO Position #1 (User 8) promoted with deadline Mon Oct 19 2026 22:58:19 GMT+0530 (India Standard Time).
+✓ Verified in PostgreSQL: 2 seats placed on temporary HOLD for promoted user.
 
 ================================================================
                      TEST EXECUTION SUMMARY                     
 ================================================================
-[✓ PASSED] Role-Based Access Control & Password Hashing         (384ms)
-[✓ PASSED] Pessimistic Concurrency & Double-Booking Protection  (24ms)
-[✓ PASSED] Database-Level CHECK, UNIQUE & FK Constraints        (2ms)
-[✓ PASSED] Demand-Driven Dynamic Pricing & Clamp Boundaries     (103ms)
-[✓ PASSED] Automated FIFO Waitlist Allocation & Cascade         (0ms)
+[✓ PASSED] Role-Based Access Control & Password Hashing         (374ms)
+[✓ PASSED] Pessimistic Concurrency & Double-Booking Protection  (120ms)
+[✓ PASSED] Database-Level CHECK, UNIQUE & FK Constraints        (151ms)
+[✓ PASSED] Demand-Driven Dynamic Pricing & Clamp Boundaries     (85ms)
+[✓ PASSED] Automated FIFO Waitlist Allocation & Cascade         (80ms)
 ----------------------------------------------------------------
 Total Suites: 5 | Passed: 5 | Failed: 0
-Total Execution Time: 514ms
+Total Execution Time: 810ms
 ================================================================
 ```
+
+---
+
+## 3. Database Engine Invariants Verified
+
+1. **Race Condition Prevention**:
+   Under simultaneous competing `Promise.all` requests, PostgreSQL pessimistic row locking (`SELECT ... FOR UPDATE`) guarantees serialization. Exactly one transaction commits, and the second is rejected with a conflict error.
+2. **Database Engine Constraint Enforcement**:
+   Invalid records cannot be inserted even by rogue API clients. PostgreSQL returns standard ANSI/SQL error codes:
+   - `23514`: Inverted start/end show times, negative prices, and orphan seat holds rejected.
+   - `23505`: Duplicate user emails and duplicate section seat coordinates rejected.
+   - `23503`: Shows referencing nonexistent venue foreign keys rejected.
+3. **Polyglot Demand Pipeline**:
+   Live documents ingested into MongoDB collections are aggregated within rolling time windows and injected into the PostgreSQL stored function `calculate_dynamic_price()`, which enforces hard `min_price` and `max_price` boundaries and logs adjustments into `price_history`.
+4. **Automated FIFO Waitlist Promotion**:
+   When booking #3 is cancelled, available seats are immediately released, the PostgreSQL trigger `trg_waitlist_promotion_on_cancellation` executes, promoting Ananya (User #8, Position #1), setting her deadline to `NOW() + INTERVAL '15 minutes'`, and locking the 2 released seats into `HELD` status for her account.

@@ -1,91 +1,106 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import { createBookingSafe, cancelBookingSafe } from '../lib/services/booking';
+import { query } from '../lib/db/pg';
+
 /**
- * Concurrent Booking Test Suite
+ * Concurrency Test Suite using REAL PostgreSQL Connection Pool
  * 
- * Demonstrates the mathematical and transactional impossibility of double-booking
- * under high-concurrency race conditions through:
- * 1. Pessimistic row locking (SELECT ... FOR UPDATE)
- * 2. Partial Unique Index (idx_show_seats_unique_booked)
+ * Executes two competing transactions via Promise.all attempting to book
+ * the exact same show seat simultaneously.
+ * Asserts:
+ * - Exactly ONE transaction succeeds (Status 201 CONFIRMED)
+ * - Exactly ONE transaction fails with lock contention / seat unavailable error
+ * - Partial UNIQUE index and row-level locks protect the real database
  */
 
 export async function runConcurrentBookingTests(): Promise<boolean> {
-  console.log('\n--- Running Concurrency & Double-Booking Prevention Tests ---');
+  console.log('\n--- Running Concurrency & Double-Booking Prevention Tests (Real PostgreSQL) ---');
 
-  interface MockSeatRecord {
-    id: number;
-    showId: number;
-    seatId: number;
-    status: 'AVAILABLE' | 'HELD' | 'BOOKED';
-    version: number;
-    locked: boolean;
+  // Find an available seat for Show 1 (Coldplay Night 1)
+  const seatRes = await query(
+    `SELECT ss.seat_id, ss.show_id, s.row_label, s.seat_number 
+     FROM show_seats ss
+     JOIN seats s ON ss.seat_id = s.id
+     WHERE ss.show_id = 1 AND ss.status = 'AVAILABLE'
+     ORDER BY ss.seat_id ASC
+     LIMIT 1`
+  );
+
+  if (seatRes.rows.length === 0) {
+    throw new Error('Test setup error: No available seats found for Show 1.');
   }
 
-  // Simulated Database Row for Show 1, Seat 45
-  const seatDb: MockSeatRecord = {
-    id: 1045,
-    showId: 1,
-    seatId: 45,
-    status: 'AVAILABLE',
-    version: 1,
-    locked: false,
-  };
+  const targetSeat = seatRes.rows[0];
+  const targetSeatId = targetSeat.seat_id;
+  const showId = targetSeat.show_id;
 
-  // Simulating Transaction 1 and Transaction 2 firing at the exact same millisecond
-  async function simulateConcurrentTransaction(
-    txnName: string,
-    userId: number,
-    delayMs: number
-  ): Promise<{ success: boolean; message: string }> {
-    // 1. Transaction attempts to acquire lock (SELECT ... FOR UPDATE)
-    if (seatDb.locked) {
-      // In real PostgreSQL, Transaction 2 waits for lock release, then reads status = BOOKED and aborts
-      return { success: false, message: `${txnName} rejected: Lock contention, seat is held by another transaction` };
+  console.log(`Targeting Show #${showId}, Seat #${targetSeatId} (${targetSeat.row_label}-${targetSeat.seat_number}) for concurrent race test...`);
+
+  // Two different customers: User 5 (Arjun) and User 6 (Priya)
+  const userA = 5;
+  const userB = 6;
+
+  let successfulBookingId: number | null = null;
+
+  try {
+    // Fire both booking transactions simultaneously
+    const [resultA, resultB] = await Promise.allSettled([
+      createBookingSafe({
+        userId: userA,
+        showId,
+        seatIds: [targetSeatId],
+        paymentMethod: 'CREDIT_CARD',
+      }),
+      createBookingSafe({
+        userId: userB,
+        showId,
+        seatIds: [targetSeatId],
+        paymentMethod: 'UPI',
+      }),
+    ]);
+
+    const fulfilled = [resultA, resultB].filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<any>[];
+    const rejected = [resultA, resultB].filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+
+    if (fulfilled.length !== 1 || rejected.length !== 1) {
+      throw new Error(
+        `Concurrency invariant violated! Expected exactly 1 success and 1 rejection, but got ${fulfilled.length} successes.`
+      );
     }
 
-    // Acquire lock
-    seatDb.locked = true;
+    const winner = fulfilled[0].value;
+    successfulBookingId = winner.bookingId;
+    const loserError = rejected[0].reason;
 
-    // Simulate database processing time
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    console.log(`✓ Winner: Booking #${winner.bookingId} (${winner.bookingReference}) confirmed for User.`);
+    console.log(`✓ Rejected: Concurrent transaction failed safely with: "${loserError.message}"`);
 
-    // Verify seat is still available
-    if (seatDb.status !== 'AVAILABLE') {
-      seatDb.locked = false;
-      return { success: false, message: `${txnName} rejected: Seat is already BOOKED` };
-    }
-
-    // Mutate state to BOOKED
-    seatDb.status = 'BOOKED';
-    seatDb.version += 1;
-    seatDb.locked = false;
-
-    return { success: true, message: `${txnName} confirmed: Booking successful` };
-  }
-
-  console.log('Initiating 2 simultaneous booking transactions on Show #1, Seat #45...');
-
-  const [res1, res2] = await Promise.all([
-    simulateConcurrentTransaction('Transaction-A (User 5)', 5, 20),
-    simulateConcurrentTransaction('Transaction-B (User 6)', 6, 20),
-  ]);
-
-  const successes = [res1, res2].filter((r) => r.success);
-  const failures = [res1, res2].filter((r) => !r.success);
-
-  if (successes.length !== 1 || failures.length !== 1) {
-    throw new Error(
-      `Double booking test failed! Expected 1 success and 1 failure, but got ${successes.length} successes.`
+    // Verify database state: seat MUST be BOOKED exactly once
+    const checkRes = await query(
+      `SELECT status, held_by FROM show_seats WHERE show_id = $1 AND seat_id = $2`,
+      [showId, targetSeatId]
     );
+
+    if (checkRes.rows[0].status !== 'BOOKED') {
+      throw new Error(`Expected seat status to be BOOKED, found: ${checkRes.rows[0].status}`);
+    }
+
+    console.log('✓ Verified in real PostgreSQL: Seat is marked BOOKED exactly once.');
+
+    return true;
+  } finally {
+    // Cleanup: Cancel the test booking and restore the seat to AVAILABLE
+    if (successfulBookingId) {
+      try {
+        await cancelBookingSafe(successfulBookingId, userA, true);
+        console.log(`✓ Test cleanup completed: Booking #${successfulBookingId} cancelled, seat released.`);
+      } catch (cleanErr) {
+        console.warn('Cleanup error:', cleanErr);
+      }
+    }
   }
-
-  console.log(`✓ Result 1: ${res1.message}`);
-  console.log(`✓ Result 2: ${res2.message}`);
-  console.log('✓ Row-level lock guarantee: Exactly 1 transaction succeeded, 1 was rejected.');
-  console.log('✓ Storage engine guarantee: Partial UNIQUE index idx_show_seats_unique_booked rejects duplicates.');
-
-  return true;
 }
 
 if (require.main === module) {

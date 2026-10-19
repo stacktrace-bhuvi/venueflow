@@ -1,75 +1,102 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import {
-  getRecentBehavioralTelemetry,
-} from '../lib/services/pricing';
-import { getEventViewsCollection, getAbandonedCheckoutsCollection } from '../lib/db/mongo';
+import { computeDynamicPrice } from '../lib/services/pricing';
+import { query } from '../lib/db/pg';
+import { getEventViewsCollection } from '../lib/db/mongo';
+
+/**
+ * Dynamic Pricing Test Suite using Real PostgreSQL & MongoDB
+ * 
+ * Verifies:
+ * 1. computeDynamicPrice() integrates MongoDB aggregation with PostgreSQL calculate_dynamic_price()
+ * 2. Mathematical clamping to [min_price, max_price]
+ * 3. Audit logging in PostgreSQL price_history table
+ */
 
 export async function runPricingTests(): Promise<boolean> {
-  console.log('\n--- Running Dynamic Pricing & Clamping Tests ---');
+  console.log('\n--- Running Dynamic Pricing & Clamping Tests (Real PG + Mongo) ---');
 
-  // 1. Test mathematical clamping behavior
-  function calculateDynamicPriceSim(
-    basePrice: number,
-    minPrice: number,
-    maxPrice: number,
-    occupancyRatio: number,
-    demandWeight: number,
-    views: number,
-    abandonments: number
-  ): number {
-    const occMult = occupancyRatio * demandWeight;
-    const behMult =
-      Math.min(views, 200) * 0.002 * 0.05 * 10 +
-      Math.min(abandonments, 50) * 0.01 * 0.08 * 10;
-    const totalMult = 1.0 + occMult + behMult;
-    const rawPrice = Math.round(basePrice * totalMult * 100) / 100;
-    return Math.max(minPrice, Math.min(maxPrice, rawPrice));
+  const showId = 1;
+
+  // 1. Fetch configured bounds from pricing_rules in PostgreSQL
+  const ruleRes = await query(
+    `SELECT s.base_price, pr.min_price, pr.max_price 
+     FROM shows s
+     JOIN pricing_rules pr ON s.id = pr.show_id
+     WHERE s.id = $1`,
+    [showId]
+  );
+
+  if (ruleRes.rows.length === 0) {
+    throw new Error('Test setup error: Pricing rules not found for Show 1.');
   }
 
-  // Min Clamp Check: Low base price with higher minPrice floor
-  const minClamped = calculateDynamicPriceSim(2000, 2500, 6000, 0.0, 0.35, 0, 0);
-  if (minClamped !== 2500) {
-    throw new Error(`Min price clamp failed: expected 2500, got ${minClamped}`);
-  }
-  console.log('✓ Dynamic pricing strictly respects min_price floor (clamped at Rs 2,500).');
+  const basePrice = parseFloat(ruleRes.rows[0].base_price);
+  const minPrice = parseFloat(ruleRes.rows[0].min_price);
+  const maxPrice = parseFloat(ruleRes.rows[0].max_price);
 
-  // Max Clamp Check: Surge demand exceeding maxPrice ceiling
-  const maxClamped = calculateDynamicPriceSim(3500, 3000, 5000, 1.0, 0.50, 500, 100);
-  if (maxClamped !== 5000) {
-    throw new Error(`Max price clamp failed: expected 5000, got ${maxClamped}`);
-  }
-  console.log('✓ Dynamic pricing strictly respects max_price ceiling (clamped at Rs 5,000).');
+  console.log(`Show #1 Baseline: Base=Rs ${basePrice}, Min=Rs ${minPrice}, Max=Rs ${maxPrice}`);
 
-  // Moderate Surge Check: Valid price scaling
-  const moderateSurge = calculateDynamicPriceSim(3500, 3000, 8000, 0.75, 0.40, 50, 5);
-  if (moderateSurge <= 3500 || moderateSurge >= 8000) {
-    throw new Error(`Moderate surge pricing out of range: got ${moderateSurge}`);
-  }
-  console.log(`✓ Moderate demand surge correctly calculated: Rs ${moderateSurge}.`);
-
-  // 2. Test MongoDB Behavioral Telemetry Aggregation
+  // 2. Insert temporary view telemetry into real MongoDB to simulate demand
   const viewsCol = await getEventViewsCollection();
-  const testShowId = 999;
-  const now = new Date();
+  const testViewDocs = Array.from({ length: 15 }).map(() => ({
+    showId,
+    eventId: 1,
+    source: 'pricing_test',
+    timestamp: new Date(),
+  }));
+  await viewsCol.insertMany(testViewDocs);
 
-  // Insert mock telemetry
-  await viewsCol.insertMany([
-    { showId: testShowId, eventId: 1, timestamp: now },
-    { showId: testShowId, eventId: 1, timestamp: new Date(now.getTime() - 1000 * 60 * 10) },
-  ]);
+  try {
+    // 3. Execute computeDynamicPrice (MongoDB Aggregation + PostgreSQL stored function)
+    const result = await computeDynamicPrice(showId);
 
-  const telemetry = await getRecentBehavioralTelemetry(testShowId, 60);
-  if (telemetry.recentViews < 2) {
-    throw new Error(`MongoDB aggregation failed to count recent views: got ${telemetry.recentViews}`);
+    console.log(`✓ Computed Dynamic Price: Rs ${result.calculatedPrice}`);
+    console.log(`✓ MongoDB Telemetry Captured: ${result.telemetry.viewsPastHour} views past hour`);
+
+    // Invariant: Must be strictly between minPrice and maxPrice
+    if (result.calculatedPrice < minPrice || result.calculatedPrice > maxPrice) {
+      throw new Error(
+        `Dynamic price out of bounds! Expected [${minPrice}, ${maxPrice}], got ${result.calculatedPrice}`
+      );
+    }
+    console.log('✓ Dynamic price strictly clamped within [min_price, max_price] bounds.');
+
+    // 4. Test Extreme Surge Clamping directly in PostgreSQL
+    const extremeRes = await query(
+      `SELECT calculate_dynamic_price($1, 500, 100) as surge_price`,
+      [showId]
+    );
+    const surgePrice = parseFloat(extremeRes.rows[0].surge_price);
+
+    if (surgePrice !== maxPrice) {
+      throw new Error(`Extreme surge clamping failed: Expected max_price ${maxPrice}, got ${surgePrice}`);
+    }
+    console.log(`✓ Extreme demand surge ceiling clamp verified: Rs ${surgePrice} == max_price (${maxPrice}).`);
+
+    // 5. Verify Price History Audit Ledger in PostgreSQL
+    const historyRes = await query(
+      `SELECT old_price, new_price, reason, recorded_at 
+       FROM price_history 
+       WHERE show_id = $1 
+       ORDER BY recorded_at DESC 
+       LIMIT 1`,
+      [showId]
+    );
+
+    if (historyRes.rows.length === 0) {
+      throw new Error('Failure: Price change was not recorded in PostgreSQL price_history table.');
+    }
+
+    const latestAudit = historyRes.rows[0];
+    console.log(`✓ Verified in PostgreSQL price_history: New Price=Rs ${latestAudit.new_price}, Reason="${latestAudit.reason}"`);
+
+    return true;
+  } finally {
+    // Clean up temporary telemetry from MongoDB
+    await viewsCol.deleteMany({ showId, source: 'pricing_test' });
   }
-  console.log(`✓ MongoDB aggregation pipeline successfully counted ${telemetry.recentViews} views in rolling 1-hour window.`);
-
-  // Cleanup mock test telemetry
-  await viewsCol.deleteMany({ showId: testShowId });
-
-  return true;
 }
 
 if (require.main === module) {

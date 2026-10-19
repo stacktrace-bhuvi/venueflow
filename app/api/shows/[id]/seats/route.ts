@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { query } from '@/lib/db/pg';
 import { successResponse, errorResponse } from '@/lib/auth/middleware';
+import { computeDynamicPrice } from '@/lib/services/pricing';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,15 +77,11 @@ export async function GET(
     const occupancyRate = totalSeats > 0 ? (bookedCount + heldCount) / totalSeats : 0;
     const basePrice = parseFloat(show.base_price);
 
-    // Simple occupancy-driven dynamic multiplier before Phase 4 full Mongo pipeline
-    const minPrice = show.min_price ? parseFloat(show.min_price) : basePrice * 0.8;
-    const maxPrice = show.max_price ? parseFloat(show.max_price) : basePrice * 2.0;
-    const demandWeight = show.demand_factor_weight ? parseFloat(show.demand_factor_weight) : 0.35;
-
-    const dynamicPrice = Math.min(
-      maxPrice,
-      Math.max(minPrice, Math.round(basePrice * (1 + occupancyRate * demandWeight) * 100) / 100)
-    );
+    // Invoke Dynamic Pricing Engine (MongoDB Telemetry + calculate_dynamic_price PL/pgSQL function)
+    const pricingResult = await computeDynamicPrice(showId);
+    const dynamicPrice = pricingResult.calculatedPrice;
+    const minPrice = pricingResult.minPrice;
+    const maxPrice = pricingResult.maxPrice;
 
     return successResponse({
       showId: show.id,

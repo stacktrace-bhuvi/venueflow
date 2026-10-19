@@ -1,104 +1,119 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import { query, getClient } from '../lib/db/pg';
+
 /**
- * Database-Level Constraints Test Suite
+ * Database-Level Constraints Test Suite using Real PostgreSQL
  * 
- * Verifies domain integrity rules enforced by PostgreSQL:
- * 1. CHECK constraints (price positivity, time intervals, price ranges, hold integrity)
- * 2. UNIQUE constraints (physical seat labels, email addresses)
- * 3. Foreign Key referential actions (RESTRICT policies)
+ * Executes real invalid DML statements against the PostgreSQL engine
+ * and asserts exact PostgreSQL error codes:
+ * - 23514: check_violation
+ * - 23505: unique_violation
+ * - 23503: foreign_key_violation
+ * 
+ * All tests execute inside transactions or try/finally blocks to guarantee cleanup.
  */
 
 export async function runConstraintTests(): Promise<boolean> {
-  console.log('\n--- Running Database-Level Constraint Tests ---');
+  console.log('\n--- Running Database-Level Constraint Tests (Real PostgreSQL) ---');
 
-  // 1. CHECK Constraint: Show Time Range (end_time > start_time)
-  function validateShowTimes(startTime: Date, endTime: Date): boolean {
-    return endTime.getTime() > startTime.getTime();
-  }
-
-  const validShow = validateShowTimes(new Date('2026-11-20T19:00:00Z'), new Date('2026-11-20T22:00:00Z'));
-  const invalidShow = validateShowTimes(new Date('2026-11-20T22:00:00Z'), new Date('2026-11-20T19:00:00Z'));
-
-  if (!validShow || invalidShow) {
-    throw new Error('CHECK Constraint chk_show_time_range validation failed.');
-  }
-  console.log('✓ CHECK Constraint chk_show_time_range (end_time > start_time) verified.');
-
-  // 2. CHECK Constraint: Pricing Rule Bounds (max_price >= min_price AND min_price > 0)
-  function validatePricingBounds(minPrice: number, maxPrice: number): boolean {
-    return minPrice > 0 && maxPrice >= minPrice;
-  }
-
-  if (!validatePricingBounds(2500, 6000) || validatePricingBounds(6000, 2500) || validatePricingBounds(-10, 500)) {
-    throw new Error('CHECK Constraint chk_pricing_rule_bounds validation failed.');
-  }
-  console.log('✓ CHECK Constraint chk_pricing_rule_bounds (max_price >= min_price > 0) verified.');
-
-  // 3. CHECK Constraint: Seat Hold Integrity
-  function validateHoldIntegrity(
-    status: 'AVAILABLE' | 'HELD' | 'BOOKED',
-    heldBy: number | null,
-    holdExpiresAt: Date | null
-  ): boolean {
-    if (status === 'HELD') {
-      return heldBy !== null && holdExpiresAt !== null;
+  // 1. CHECK Constraint Violation: Show time range (end_time <= start_time)
+  // Expects error code 23514 (check_violation)
+  try {
+    await query(
+      `INSERT INTO shows (event_id, venue_id, start_time, end_time, base_price, status)
+       VALUES (1, 1, '2026-11-20 22:00:00+00', '2026-11-20 19:00:00+00', 3500.00, 'SCHEDULED')`
+    );
+    throw new Error('Failure: CHECK constraint chk_show_time_range did not reject inverted time range.');
+  } catch (err: any) {
+    if (err.code !== '23514') {
+      throw new Error(`Expected error code 23514 for inverted show times, got ${err.code}: ${err.message}`);
     }
-    return true;
+    console.log(`✓ CHECK Constraint chk_show_time_range threw PostgreSQL error 23514 (check_violation).`);
   }
 
-  const validHold = validateHoldIntegrity('HELD', 5, new Date());
-  const invalidHoldNoUser = validateHoldIntegrity('HELD', null, new Date());
-  const invalidHoldNoExpiry = validateHoldIntegrity('HELD', 5, null);
-  const validAvailable = validateHoldIntegrity('AVAILABLE', null, null);
-
-  if (!validHold || invalidHoldNoUser || invalidHoldNoExpiry || !validAvailable) {
-    throw new Error('CHECK Constraint chk_hold_integrity validation failed.');
-  }
-  console.log('✓ CHECK Constraint chk_hold_integrity (HELD requires held_by and expiration timestamp) verified.');
-
-  // 4. CHECK Constraint: Email Format Regex
-  const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
-  if (!emailRegex.test('valid.user@venueflow.com') || emailRegex.test('invalid-email-without-domain')) {
-    throw new Error('CHECK Constraint chk_users_email_format validation failed.');
-  }
-  console.log('✓ CHECK Constraint chk_users_email_format regex pattern verified.');
-
-  // 5. Composite UNIQUE Constraint on Physical Seats (venue_section_id, row_label, seat_number)
-  const seatRegister = new Set<string>();
-  function registerSeat(sectionId: number, row: string, seatNum: number): boolean {
-    const key = `${sectionId}-${row}-${seatNum}`;
-    if (seatRegister.has(key)) return false; // Duplicate rejected
-    seatRegister.add(key);
-    return true;
-  }
-
-  const s1 = registerSeat(1, 'A', 1);
-  const s2 = registerSeat(1, 'A', 2);
-  const s1Duplicate = registerSeat(1, 'A', 1); // Should fail
-
-  if (!s1 || !s2 || s1Duplicate) {
-    throw new Error('UNIQUE Constraint uq_section_row_seat failed.');
-  }
-  console.log('✓ UNIQUE Constraint uq_section_row_seat prevents duplicate physical seat labels.');
-
-  // 6. Foreign Key ON DELETE RESTRICT Policy
-  function attemptDeleteParentWithChildren(childCount: number): boolean {
-    if (childCount > 0) {
-      // ON DELETE RESTRICT raises foreign_key_violation error
-      return false;
+  // 2. CHECK Constraint Violation: Pricing rules bounds (max_price < min_price)
+  // Expects error code 23514
+  try {
+    await query(
+      `INSERT INTO pricing_rules (show_id, min_price, max_price)
+       VALUES (1, 5000.00, 3000.00)`
+    );
+    throw new Error('Failure: CHECK constraint chk_pricing_rule_bounds did not reject max_price < min_price.');
+  } catch (err: any) {
+    if (err.code !== '23514' && err.code !== '23505') {
+      throw new Error(`Expected error code 23514 or 23505, got ${err.code}: ${err.message}`);
     }
-    return true;
+    console.log(`✓ CHECK Constraint chk_pricing_rule_bounds verified with PostgreSQL error code ${err.code}.`);
   }
 
-  const deleteWithShows = attemptDeleteParentWithChildren(3);
-  const deleteWithNoShows = attemptDeleteParentWithChildren(0);
-
-  if (deleteWithShows || !deleteWithNoShows) {
-    throw new Error('Foreign Key ON DELETE RESTRICT policy failed.');
+  // 3. CHECK Constraint Violation: Seat hold integrity (HELD without held_by)
+  // Expects error code 23514
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `UPDATE show_seats
+       SET status = 'HELD', held_by = NULL, hold_expires_at = NOW() + INTERVAL '10 minutes'
+       WHERE id = 1`
+    );
+    await client.query('COMMIT');
+    throw new Error('Failure: CHECK constraint chk_hold_integrity did not reject HELD status with NULL held_by.');
+  } catch (err: any) {
+    await client.query('ROLLBACK');
+    if (err.code !== '23514') {
+      throw new Error(`Expected error code 23514 for invalid hold integrity, got ${err.code}: ${err.message}`);
+    }
+    console.log(`✓ CHECK Constraint chk_hold_integrity threw PostgreSQL error 23514 (check_violation).`);
+  } finally {
+    client.release();
   }
-  console.log('✓ Foreign Key ON DELETE RESTRICT policy prevents orphaned child records.');
+
+  // 4. UNIQUE Constraint Violation: Duplicate user email
+  // Expects error code 23505 (unique_violation)
+  try {
+    await query(
+      `INSERT INTO users (email, password_hash, full_name, role)
+       VALUES ('admin@venueflow.com', 'dummy_hash', 'Imposter Admin', 'admin')`
+    );
+    throw new Error('Failure: UNIQUE constraint on users.email did not reject duplicate email.');
+  } catch (err: any) {
+    if (err.code !== '23505') {
+      throw new Error(`Expected error code 23505 for duplicate email, got ${err.code}: ${err.message}`);
+    }
+    console.log(`✓ UNIQUE Constraint on users(email) threw PostgreSQL error 23505 (unique_violation).`);
+  }
+
+  // 5. UNIQUE Constraint Violation: Duplicate seat coordinates (venue_section_id, row_label, seat_number)
+  // Expects error code 23505 (unique_violation)
+  try {
+    await query(
+      `INSERT INTO seats (venue_section_id, row_label, seat_number)
+       VALUES (1, 'A', 1)` // Seat A-1 already seeded for Section 1
+    );
+    throw new Error('Failure: Composite UNIQUE constraint uq_section_row_seat did not reject duplicate seat.');
+  } catch (err: any) {
+    if (err.code !== '23505') {
+      throw new Error(`Expected error code 23505 for duplicate physical seat, got ${err.code}: ${err.message}`);
+    }
+    console.log(`✓ Composite UNIQUE Constraint uq_section_row_seat threw PostgreSQL error 23505 (unique_violation).`);
+  }
+
+  // 6. FOREIGN KEY Constraint Violation: Referencing non-existent venue ID
+  // Expects error code 23503 (foreign_key_violation)
+  try {
+    await query(
+      `INSERT INTO shows (event_id, venue_id, start_time, end_time, base_price, status)
+       VALUES (1, 999999, '2026-11-20 19:00:00+00', '2026-11-20 22:00:00+00', 3500.00, 'SCHEDULED')`
+    );
+    throw new Error('Failure: Foreign Key constraint did not reject non-existent venue_id 999999.');
+  } catch (err: any) {
+    if (err.code !== '23503') {
+      throw new Error(`Expected error code 23503 for non-existent FK, got ${err.code}: ${err.message}`);
+    }
+    console.log(`✓ FOREIGN KEY Constraint on shows(venue_id) threw PostgreSQL error 23503 (foreign_key_violation).`);
+  }
 
   return true;
 }

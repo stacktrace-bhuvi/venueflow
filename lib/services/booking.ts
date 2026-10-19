@@ -1,5 +1,6 @@
 import { PoolClient } from 'pg';
 import { getClient } from '../db/pg';
+import { processWaitlistPromotions } from './waitlist';
 
 /**
  * Safe Booking Service for VenueFlow.
@@ -278,19 +279,7 @@ export async function cancelBookingSafe(
       throw new Error('This booking is already cancelled.');
     }
 
-    // Update booking status
-    await client.query(
-      `UPDATE bookings SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
-      [bookingId]
-    );
-
-    // Update payment record to REFUNDED
-    await client.query(
-      `UPDATE payments SET payment_status = 'REFUNDED' WHERE booking_id = $1`,
-      [bookingId]
-    );
-
-    // Fetch seats attached to this booking
+    // 1. Fetch seats attached to this booking
     const itemsRes = await client.query(
       `SELECT show_seat_id FROM booking_items WHERE booking_id = $1`,
       [bookingId]
@@ -298,7 +287,7 @@ export async function cancelBookingSafe(
 
     const showSeatIds = itemsRes.rows.map((r) => r.show_seat_id);
 
-    // Release seats back to AVAILABLE
+    // 2. Release seats back to AVAILABLE first so waitlist triggers can acquire them
     if (showSeatIds.length > 0) {
       await client.query(
         `UPDATE show_seats 
@@ -308,7 +297,28 @@ export async function cancelBookingSafe(
       );
     }
 
+    // 3. Update booking status to CANCELLED (fires trigger trg_waitlist_promotion_on_cancellation)
+    await client.query(
+      `UPDATE bookings SET status = 'CANCELLED', updated_at = NOW() WHERE id = $1`,
+      [bookingId]
+    );
+
+    // 4. Update payment record to REFUNDED
+    await client.query(
+      `UPDATE payments SET payment_status = 'REFUNDED' WHERE booking_id = $1`,
+      [bookingId]
+    );
+
     await client.query('COMMIT');
+
+    // Automatically trigger FIFO waitlist promotions for released seats
+    if (showSeatIds.length > 0) {
+      try {
+        await processWaitlistPromotions(booking.show_id, showSeatIds.length);
+      } catch (waitlistErr) {
+        console.warn('[Waitlist promotion after cancellation]:', waitlistErr);
+      }
+    }
 
     return {
       bookingId,

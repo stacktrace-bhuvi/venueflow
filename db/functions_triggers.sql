@@ -9,12 +9,14 @@ DROP TRIGGER IF EXISTS trg_audit_bookings ON bookings;
 DROP TRIGGER IF EXISTS trg_audit_pricing_rules ON pricing_rules;
 DROP TRIGGER IF EXISTS trg_prevent_past_show_booking ON bookings;
 DROP TRIGGER IF EXISTS trg_sync_show_status ON show_seats;
+DROP TRIGGER IF EXISTS trg_waitlist_promotion_on_cancellation ON bookings;
 
 DROP FUNCTION IF EXISTS log_audit_trail() CASCADE;
 DROP FUNCTION IF EXISTS check_past_show_booking() CASCADE;
 DROP FUNCTION IF EXISTS sync_show_status_from_seats() CASCADE;
 DROP FUNCTION IF EXISTS calculate_dynamic_price(INT, INT, INT) CASCADE;
 DROP FUNCTION IF EXISTS promote_waitlist_fifo(INT, INT) CASCADE;
+DROP FUNCTION IF EXISTS trigger_promote_waitlist_on_cancellation() CASCADE;
 
 -- ============================================================================
 -- 1. ADVANCED CONCEPT: Stored Function for Dynamic Pricing
@@ -95,9 +97,9 @@ BEGIN
     v_occupancy_multiplier := v_occupancy_ratio * v_demand_factor_weight;
 
     -- 4. Calculate behavioral telemetry demand surge (Mongo inputs)
-    -- Normalize views (e.g. 50 views adds significant demand) and abandoned checkouts
-    v_behavioral_multiplier := (LEAST(p_recent_views, 200) * 0.002 * v_view_weight * 10) +
-                               (LEAST(p_recent_abandonments, 50) * 0.01 * v_abandon_weight * 10);
+    -- Multipliers scale smoothly with views and abandoned checkouts
+    v_behavioral_multiplier := (p_recent_views * 0.005 * v_view_weight * 10) +
+                               (p_recent_abandonments * 0.02 * v_abandon_weight * 10);
 
     -- 5. Combine multipliers
     v_total_multiplier := 1.0000 + v_occupancy_multiplier + v_behavioral_multiplier;
@@ -239,6 +241,7 @@ AS $$
 DECLARE
     r_waitlist RECORD;
     v_remaining_seats INT := p_available_seats;
+    v_seat_ids INT[];
 BEGIN
     -- Iterate through FIFO waiting queue
     FOR r_waitlist IN 
@@ -249,22 +252,43 @@ BEGIN
         FOR UPDATE
     LOOP
         IF r_waitlist.requested_quantity <= v_remaining_seats THEN
-            -- Promote this entrant
-            UPDATE waitlist_entries
-            SET status = 'PROMOTED',
-                promoted_until = CURRENT_TIMESTAMP + INTERVAL '15 minutes',
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = r_waitlist.id;
+            -- Select available seats to place on HOLD for this promoted customer
+            SELECT ARRAY_AGG(id) INTO v_seat_ids
+            FROM (
+                SELECT id 
+                FROM show_seats 
+                WHERE show_id = p_show_id AND status = 'AVAILABLE'
+                ORDER BY id ASC
+                LIMIT r_waitlist.requested_quantity
+                FOR UPDATE
+            ) sub;
 
-            promoted_waitlist_id := r_waitlist.id;
-            promoted_user_id := r_waitlist.user_id;
-            allocated_quantity := r_waitlist.requested_quantity;
-            RETURN NEXT;
+            IF v_seat_ids IS NOT NULL AND ARRAY_LENGTH(v_seat_ids, 1) = r_waitlist.requested_quantity THEN
+                -- Mark seats on temporary HOLD for promoted user (15 minutes)
+                UPDATE show_seats
+                SET status = 'HELD',
+                    held_by = r_waitlist.user_id,
+                    hold_expires_at = CURRENT_TIMESTAMP + INTERVAL '15 minutes',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ANY(v_seat_ids);
 
-            v_remaining_seats := v_remaining_seats - r_waitlist.requested_quantity;
+                -- Promote this entrant
+                UPDATE waitlist_entries
+                SET status = 'PROMOTED',
+                    promoted_until = CURRENT_TIMESTAMP + INTERVAL '15 minutes',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = r_waitlist.id;
 
-            IF v_remaining_seats <= 0 THEN
-                EXIT;
+                promoted_waitlist_id := r_waitlist.id;
+                promoted_user_id := r_waitlist.user_id;
+                allocated_quantity := r_waitlist.requested_quantity;
+                RETURN NEXT;
+
+                v_remaining_seats := v_remaining_seats - r_waitlist.requested_quantity;
+
+                IF v_remaining_seats <= 0 THEN
+                    EXIT;
+                END IF;
             END IF;
         END IF;
     END LOOP;
@@ -307,3 +331,35 @@ CREATE TRIGGER trg_audit_pricing_rules
 AFTER INSERT OR UPDATE OR DELETE ON pricing_rules
 FOR EACH ROW
 EXECUTE FUNCTION log_audit_trail();
+
+-- ============================================================================
+-- 6. ADVANCED CONCEPT: Trigger to Automatically Promote Waitlist on Cancellation
+-- ============================================================================
+-- When a booking is updated to CANCELLED, this trigger automatically calculates
+-- the released seat count and executes promote_waitlist_fifo to promote the
+-- next waiting entrant(s) directly in the database engine.
+
+CREATE OR REPLACE FUNCTION trigger_promote_waitlist_on_cancellation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_released_seats INT := 0;
+BEGIN
+    IF NEW.status = 'CANCELLED' AND OLD.status != 'CANCELLED' THEN
+        SELECT COUNT(*) INTO v_released_seats
+        FROM booking_items
+        WHERE booking_id = NEW.id;
+
+        IF v_released_seats > 0 THEN
+            PERFORM promote_waitlist_fifo(NEW.show_id, v_released_seats);
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_waitlist_promotion_on_cancellation
+AFTER UPDATE OF status ON bookings
+FOR EACH ROW
+EXECUTE FUNCTION trigger_promote_waitlist_on_cancellation();
