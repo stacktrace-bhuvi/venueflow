@@ -1,0 +1,233 @@
+@import 'tailwindcss';
+
+/* ============================================================
+   VenueFlow Design System
+   Dark "aurora" theme: deep navy canvas, neon accents, glass
+   surfaces. Tokens below become Tailwind utilities automatically
+   (e.g. --color-ink-900 -> bg-ink-900, text-ink-900).
+   ============================================================ */
+@theme {
+  --color-ink-950: #04050e;
+  --color-ink-900: #080b1c;
+  --color-ink-850: #0d1128;
+  --color-ink-800: #141937;
+  --color-ink-700: #1e2450;
+  --color-ink-600: #2c3468;
+
+  --color-neon-violet: #8b5cf6;
+  --color-neon-indigo: #6366f1;
+  --color-neon-cyan: #22d3ee;
+  --color-neon-pink: #f472b6;
+  --color-neon-amber: #fbbf24;
+  --color-neon-emerald: #34d399;
+
+  /* Chart palette — validated for dark-surface CVD separation and the
+     OKLCH lightness band (see dataviz validator). Assign in this fixed
+     order, never cycled. Always pair with legend + direct labels. */
+  --color-chart-1: #8b5cf6;
+  --color-chart-2: #0891b2;
+  --color-chart-3: #ec4899;
+
+  --font-display: var(--font-space-grotesk), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  --animate-aurora: aurora 18s ease-in-out infinite;
+  --animate-shimmer: shimmer 2.2s linear infinite;
+  --animate-pulse-glow: pulse-glow 2.6s ease-in-out infinite;
+  --animate-float: float 7s ease-in-out infinite;
+}
+
+@keyframes aurora {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  33% {
+    transform: translate3d(6%, -8%, 0) scale(1.15);
+  }
+  66% {
+    transform: translate3d(-7%, 5%, 0) scale(0.92);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes pulse-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+/* ---------- base ---------- */
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--color-ink-950);
+  color: #e6e9f5;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+::selection {
+  background: var(--color-neon-violet);
+  color: #fff;
+}
+
+/* slim neon scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-ink-900);
+}
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(var(--color-neon-violet), var(--color-neon-indigo));
+  border-radius: 999px;
+  border: 2px solid var(--color-ink-900);
+}
+
+/* ---------- reusable component classes ---------- */
+@layer components {
+  /* frosted glass panel */
+  .glass {
+    background: rgba(20, 25, 55, 0.55);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .glass-hover {
+    transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
+  }
+  .glass-hover:hover {
+    border-color: rgba(139, 92, 246, 0.45);
+    box-shadow: 0 0 34px -8px rgba(139, 92, 246, 0.55);
+  }
+
+  /* gradient headline text */
+  .text-gradient {
+    background: linear-gradient(110deg, #fff 10%, var(--color-neon-violet) 45%, var(--color-neon-cyan) 80%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* primary action button */
+  .btn-neon {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.75rem;
+    padding: 0.7rem 1.4rem;
+    font-weight: 600;
+    color: #fff;
+    background: linear-gradient(110deg, var(--color-neon-violet), var(--color-neon-indigo));
+    box-shadow: 0 8px 28px -10px rgba(139, 92, 246, 0.9);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+  }
+  .btn-neon:hover {
+    transform: translateY(-2px);
+    filter: brightness(1.12);
+    box-shadow: 0 14px 34px -10px rgba(139, 92, 246, 1);
+  }
+  .btn-neon:active {
+    transform: translateY(0);
+  }
+  .btn-neon:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    filter: none;
+  }
+
+  /* secondary / outline button */
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.75rem;
+    padding: 0.7rem 1.4rem;
+    font-weight: 600;
+    color: #cbd3f0;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.03);
+    transition: all 0.2s ease;
+  }
+  .btn-ghost:hover {
+    color: #fff;
+    border-color: rgba(139, 92, 246, 0.6);
+    background: rgba(139, 92, 246, 0.1);
+  }
+
+  /* text input */
+  .field {
+    width: 100%;
+    border-radius: 0.75rem;
+    background: rgba(8, 11, 28, 0.8);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.7rem 1rem;
+    color: #e6e9f5;
+    outline: none;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .field::placeholder {
+    color: #6b7399;
+  }
+  .field:focus {
+    border-color: var(--color-neon-violet);
+    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.18);
+  }
+
+  /* small status pill */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  /* skeleton loading shimmer */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      rgba(255, 255, 255, 0.04) 25%,
+      rgba(255, 255, 255, 0.12) 50%,
+      rgba(255, 255, 255, 0.04) 75%
+    );
+    background-size: 200% 100%;
+    animation: var(--animate-shimmer);
+  }
+}
