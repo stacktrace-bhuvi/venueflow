@@ -1,6 +1,5 @@
 import { PoolClient } from 'pg';
 import { getClient } from '../db/pg';
-import { processWaitlistPromotions } from './waitlist';
 
 /**
  * Safe Booking Service for VenueFlow.
@@ -310,15 +309,6 @@ export async function cancelBookingSafe(
     );
 
     await client.query('COMMIT');
-
-    // Automatically trigger FIFO waitlist promotions for released seats
-    if (showSeatIds.length > 0) {
-      try {
-        await processWaitlistPromotions(booking.show_id, showSeatIds.length);
-      } catch (waitlistErr) {
-        console.warn('[Waitlist promotion after cancellation]:', waitlistErr);
-      }
-    }
 
     return {
       bookingId,

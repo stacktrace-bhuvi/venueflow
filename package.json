@@ -11,7 +11,8 @@
     "db:init": "tsx scripts/db-init.ts",
     "db:seed": "tsx scripts/db-seed.ts",
     "mongo:init": "tsx scripts/mongo-init.ts",
-    "test": "tsx tests/run-all.ts"
+    "pg:start": "tsx scripts/start-pg.ts",
+    "test": "npm run db:seed && tsx tests/run-all.ts"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

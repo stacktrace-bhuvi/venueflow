@@ -96,50 +96,77 @@ VenueFlow is an enterprise-grade ticketing platform engineered for high-concurre
 ## 4. Quickstart & Local Setup Guide
 
 ### 4.1 Prerequisites
-- **Node.js**: v18+ (tested on v22)
-- **PostgreSQL**: v14+ (local service, Docker, or Cloud PG such as Neon / Supabase)
-- **MongoDB**: v6+ (running on `localhost:27017` or Docker)
+- **Node.js**: v18+ (tested on v20 & v22)
+- **Database Options**: Choose either **Option A (Docker)** or **Option B (Embedded PostgreSQL + Local MongoDB)**.
 
-### 4.2 Start Databases via Docker (Optional)
-If you have Docker installed, spin up both databases with one command:
+---
+
+### 4.2 Database Setup Options
+
+#### Option A: Docker Setup (Recommended if Docker Desktop is installed)
+Spin up PostgreSQL 16 and MongoDB 7 in isolated containers with a single command:
 ```bash
 docker compose up -d
 ```
+This runs PostgreSQL on `localhost:5432` (user: `postgres`, password: `password`, db: `venueflow`) and MongoDB on `localhost:27017`.
+
+#### Option B: Embedded PostgreSQL Setup (Zero External Postgres Install Required)
+If Docker is not installed or you prefer a lightweight, self-contained setup:
+1. Ensure MongoDB is running locally on port 27017 (e.g., Windows MongoDB service or `mongod`).
+2. Start the embedded PostgreSQL server (persists to `.pgdata` on port 5432):
+```bash
+npm run pg:start
+```
+> **Note:** `npm run pg:start` uses `embedded-postgres` (PostgreSQL 18 binary) targeting `.pgdata`. Keep this terminal tab open or run it as a background service while developing and testing.
+
+---
 
 ### 4.3 Configure Environment Variables
-Copy `.env.example` to `.env`:
+Copy `.env.example` to `.env` if not already present:
 ```bash
 cp .env.example .env
 ```
 Default connection parameters:
 - `DATABASE_URL=postgresql://postgres:postgres@localhost:5432/venueflow`
+- `PGHOST=localhost`
+- `PGPORT=5432`
+- `PGUSER=postgres`
+- `PGPASSWORD=postgres`
+- `PGDATABASE=venueflow`
 - `MONGODB_URI=mongodb://localhost:27017/venueflow`
+- `MONGODB_DB_NAME=venueflow`
 - `JWT_SECRET=venueflow-dev-secret-key-change-in-production-min32chars`
 
+---
+
 ### 4.4 Initialize and Seed Databases
-Execute the one-command setup scripts:
+Execute the one-command setup scripts against your running database:
 ```bash
 # 1. Initialize MongoDB collections, compound indexes, and TTL eviction policies
 npm run mongo:init
 
-# 2. Initialize PostgreSQL schema, stored functions, triggers, and views
+# 2. Initialize PostgreSQL schema, stored functions, triggers, and analytical views
 npm run db:init
 
 # 3. Populate database with realistic venues, shows, seats, pricing rules, and users
 npm run db:seed
 ```
 
+---
+
 ### 4.5 Run the Development API Server
 ```bash
 npm run dev
 ```
-The API is available at `http://localhost:3000/api`. Verify health:
+The API is available at `http://localhost:3000/api`. Verify database health:
 ```bash
 curl http://localhost:3000/api/health
 ```
 
+---
+
 ### 4.6 Run the Automated Test Suite
-Execute all 5 evaluation test suites:
+Execute all 5 evaluation test suites with automatic reseeding and idempotent teardown:
 ```bash
 npm test
 ```

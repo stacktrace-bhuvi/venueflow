@@ -121,7 +121,7 @@ BEGIN
 
     -- 8. Log to price_history if changed
     v_reason := FORMAT(
-        'Dynamic update: Occ=%%%s, Views=%s, Abandon=%s (Mult: %s)',
+        'Dynamic update: Occ=%s%%, Views=%s, Abandon=%s (Mult: %s)',
         ROUND(v_occupancy_ratio * 100, 1),
         p_recent_views,
         p_recent_abandonments,

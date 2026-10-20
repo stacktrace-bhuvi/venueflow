@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import { query, getClient } from '../lib/db/pg';
+import { query, getClient, pool } from '../lib/db/pg';
 
 /**
  * Database-Level Constraints Test Suite using Real PostgreSQL
@@ -21,7 +21,7 @@ export async function runConstraintTests(): Promise<boolean> {
   // 1. CHECK Constraint Violation: Show time range (end_time <= start_time)
   // Expects error code 23514 (check_violation)
   try {
-    await query(
+    await pool.query(
       `INSERT INTO shows (event_id, venue_id, start_time, end_time, base_price, status)
        VALUES (1, 1, '2026-11-20 22:00:00+00', '2026-11-20 19:00:00+00', 3500.00, 'SCHEDULED')`
     );
@@ -36,7 +36,7 @@ export async function runConstraintTests(): Promise<boolean> {
   // 2. CHECK Constraint Violation: Pricing rules bounds (max_price < min_price)
   // Expects error code 23514
   try {
-    await query(
+    await pool.query(
       `INSERT INTO pricing_rules (show_id, min_price, max_price)
        VALUES (1, 5000.00, 3000.00)`
     );
@@ -73,7 +73,7 @@ export async function runConstraintTests(): Promise<boolean> {
   // 4. UNIQUE Constraint Violation: Duplicate user email
   // Expects error code 23505 (unique_violation)
   try {
-    await query(
+    await pool.query(
       `INSERT INTO users (email, password_hash, full_name, role)
        VALUES ('admin@venueflow.com', 'dummy_hash', 'Imposter Admin', 'admin')`
     );
@@ -88,7 +88,7 @@ export async function runConstraintTests(): Promise<boolean> {
   // 5. UNIQUE Constraint Violation: Duplicate seat coordinates (venue_section_id, row_label, seat_number)
   // Expects error code 23505 (unique_violation)
   try {
-    await query(
+    await pool.query(
       `INSERT INTO seats (venue_section_id, row_label, seat_number)
        VALUES (1, 'A', 1)` // Seat A-1 already seeded for Section 1
     );
@@ -103,7 +103,7 @@ export async function runConstraintTests(): Promise<boolean> {
   // 6. FOREIGN KEY Constraint Violation: Referencing non-existent venue ID
   // Expects error code 23503 (foreign_key_violation)
   try {
-    await query(
+    await pool.query(
       `INSERT INTO shows (event_id, venue_id, start_time, end_time, base_price, status)
        VALUES (1, 999999, '2026-11-20 19:00:00+00', '2026-11-20 22:00:00+00', 3500.00, 'SCHEDULED')`
     );

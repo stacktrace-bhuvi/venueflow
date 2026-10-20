@@ -142,27 +142,6 @@ export async function processWaitlistPromotions(
       quantity: r.allocated_quantity,
     }));
 
-    // For each promoted user, place available seats on temporary HOLD
-    for (const promo of promotions) {
-      const seatsToHold = await client.query(
-        `SELECT id FROM show_seats 
-         WHERE show_id = $1 AND status = 'AVAILABLE'
-         LIMIT $2
-         FOR UPDATE`,
-        [showId, promo.quantity]
-      );
-
-      const seatIds = seatsToHold.rows.map((r) => r.id);
-      if (seatIds.length > 0) {
-        await client.query(
-          `UPDATE show_seats 
-           SET status = 'HELD', held_by = $1, hold_expires_at = NOW() + INTERVAL '15 minutes', updated_at = NOW()
-           WHERE id = ANY($2::int[])`,
-          [promo.userId, seatIds]
-        );
-      }
-    }
-
     await client.query('COMMIT');
     return promotions;
   } catch (err) {

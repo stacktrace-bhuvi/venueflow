@@ -90,6 +90,9 @@ export async function runPricingTests(): Promise<boolean> {
     }
 
     const latestAudit = historyRes.rows[0];
+    if (!latestAudit.reason.includes('Occ=10.0%')) {
+      throw new Error(`Expected price_history reason to include "Occ=10.0%", got: "${latestAudit.reason}"`);
+    }
     console.log(`✓ Verified in PostgreSQL price_history: New Price=Rs ${latestAudit.new_price}, Reason="${latestAudit.reason}"`);
 
     return true;
