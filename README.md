@@ -191,3 +191,67 @@ All seed accounts use the default password: **`Password123!`**
 
 ## 6. API Contract Documentation
 For endpoint specifications, request/response JSON examples, and error codes used by Person 2's frontend, consult [`docs/api-contract.md`](./docs/api-contract.md).
+
+---
+
+## Frontend (Person 2) — Next.js Application Layer
+
+The UI is a Next.js App Router client built against the API contract above. It is
+styled with Tailwind CSS v4 and animated with Motion (`motion/react`).
+
+### Additional setup
+
+Beyond the backend steps above, the frontend needs two packages (already in
+`package.json` after install):
+
+```bash
+npm install motion
+npm install -D tailwindcss @tailwindcss/postcss
+npm run dev
+```
+
+### Routes
+
+| Route | Role | Purpose |
+| :--- | :--- | :--- |
+| `/` | public | Landing page; live catalogue from `GET /api/events` |
+| `/events` | public | Browse with full-text search, genre/city filters, pagination |
+| `/events/[id]` | public | Event detail with showtimes and live availability |
+| `/shows/[id]` | public / customer | **Seat map**, dynamic pricing panel, atomic booking, waitlist |
+| `/login`, `/register` | public | Authentication against the JWT cookie session |
+| `/bookings` | authenticated | Booking history and cancellation (fires the waitlist trigger) |
+| `/waitlist` | authenticated | FIFO queue position, people ahead, promotion countdown |
+| `/manager` | manager, admin | Venue summaries and show occupancy from the SQL views |
+| `/admin` | admin | Platform financials, role mix, revenue by event, audit trail |
+
+### Architecture notes
+
+- **`lib/api.ts`** — single `apiFetch()` wrapper over the `{ success, data, error }`
+  envelope. Throws a typed `ApiError` carrying the backend error `code`, so the UI
+  can branch on `SEATS_UNAVAILABLE` specifically rather than parsing message text.
+  Also exports `track()` for behavioural telemetry and `inr()` for currency.
+- **`lib/auth-context.tsx`** — session provider. The JWT lives in a `httpOnly`
+  cookie and is deliberately unreadable from JavaScript, so session state is
+  resolved by calling `GET /api/auth/me` on mount.
+- **`components/Protected.tsx`** — client-side route guard. This is convenience
+  only; authorisation is enforced by `requireRole()` in the API middleware. Hiding
+  a button is not access control.
+- **Behavioural tracking** — the UI posts `search`, `view` and `abandoned_checkout`
+  events to `POST /api/tracking`. These are the MongoDB documents the demand
+  aggregation consumes, so the dynamic price only moves because the frontend emits
+  them.
+- **Chart colours** — the categorical palette (`--color-chart-1..3` in
+  `app/globals.css`) was validated for colour-vision-deficiency separation and
+  OKLCH lightness against the dark surface. Charts always pair colour with a
+  direct label or legend, never colour alone.
+
+### Demonstrating the advanced database features in the UI
+
+| Concept | Where to see it |
+| :--- | :--- |
+| Transaction + row lock | Open one show in two browsers, select the same seat, confirm both — exactly one succeeds, the other gets `SEATS_UNAVAILABLE` |
+| Trigger (waitlist) | Cancel a booking on `/bookings`; the released-seat count is reported and the queue advances |
+| Stored function (pricing) | The price panel on `/shows/[id]` shows base price, live dynamic price, demand tier and the min/max caps |
+| Full-text search | The search box on `/events` queries the `tsvector` GIN index |
+| Views | `/manager` renders `manager_dashboard_view` and `show_occupancy_view`; `/admin` renders `revenue_by_event_view` |
+| NoSQL aggregation | Repeated searches and abandoned checkouts raise the demand tier shown on the seat map |
