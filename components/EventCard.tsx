@@ -1,11 +1,15 @@
 'use client';
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { motion } from 'motion/react';
-import { inr, type EventCard as EventCardType } from '@/lib/api';
+import { inr, posterSrc, type EventCard as EventCardType } from '@/lib/api';
 
 /** Shared catalogue card used on the landing page and the browse page. */
 export default function EventCard({ ev }: { ev: EventCardType }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const showImage = Boolean(ev.posterUrl) && !imgFailed;
+
   return (
     <motion.div
       variants={{
@@ -15,11 +19,31 @@ export default function EventCard({ ev }: { ev: EventCardType }) {
       whileHover={{ y: -6 }}
     >
       <Link href={`/events/${ev.id}`} className="glass glass-hover group block h-full overflow-hidden rounded-2xl">
-        <div className="relative h-32 overflow-hidden bg-gradient-to-br from-neon-violet/30 via-neon-indigo/20 to-neon-cyan/20">
-          <div className="absolute inset-0 grid place-items-center">
-            <span className="font-display text-5xl font-black opacity-20">{ev.title.charAt(0)}</span>
-          </div>
-          {ev.genre && <span className="pill absolute left-3 top-3 bg-ink-950/70 text-slate-200">{ev.genre}</span>}
+        {/* poster band */}
+        <div className="relative h-44 overflow-hidden bg-gradient-to-br from-neon-violet/30 via-neon-indigo/20 to-neon-cyan/20">
+          {showImage ? (
+            <>
+              <img
+                src={posterSrc(ev.posterUrl!, 640)}
+                alt={ev.title}
+                loading="lazy"
+                onError={() => setImgFailed(true)}
+                className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+              />
+              {/* legibility scrim so the pill and card edge stay readable */}
+              <div className="absolute inset-0 bg-gradient-to-t from-ink-900 via-ink-900/25 to-ink-950/30" />
+            </>
+          ) : (
+            <div className="absolute inset-0 grid place-items-center">
+              <span className="font-display text-5xl font-black opacity-20">{ev.title.charAt(0)}</span>
+            </div>
+          )}
+
+          {ev.genre && (
+            <span className="pill absolute left-3 top-3 bg-ink-950/75 text-slate-100 backdrop-blur-sm">
+              {ev.genre}
+            </span>
+          )}
         </div>
 
         <div className="p-5">

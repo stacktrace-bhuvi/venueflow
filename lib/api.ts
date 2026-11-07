@@ -181,6 +181,21 @@ export type ShowSeats = {
   seats: Seat[];
 };
 
+/**
+ * Build a sized poster URL.
+ *
+ * Unsplash serves a raw photo at the bare URL, which can be several MB.
+ * Appending its sizing params asks the CDN for a right-sized, compressed,
+ * auto-format image instead. Any other host is returned untouched, so
+ * local files (e.g. /posters/rock.jpg) work the same way.
+ */
+export function posterSrc(url: string, width = 800): string {
+  if (!url) return url;
+  if (!url.includes('images.unsplash.com')) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}w=${width}&q=80&auto=format&fit=crop`;
+}
+
 /** Rupee formatter used across the app. */
 export const inr = (n: number | string) =>
   new Intl.NumberFormat('en-IN', {
