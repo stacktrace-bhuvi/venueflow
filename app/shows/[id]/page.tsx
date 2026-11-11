@@ -28,6 +28,8 @@ export default function SeatMapPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<number[]>([]);
+  const [holdExpiresAt, setHoldExpiresAt] = useState<string | null>(null);
+  const [holdingSeat, setHoldingSeat] = useState<number | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<'CREDIT_CARD' | 'DEBIT_CARD' | 'UPI' | 'NET_BANKING'>('UPI');
   const [booking, setBooking] = useState(false);
   const [bookErr, setBookErr] = useState<string | null>(null);
@@ -63,6 +65,41 @@ export default function SeatMapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.showId]);
 
+  /* Seat holds.
+     Polls a lightweight status endpoint (not /seats, which recomputes the
+     dynamic price and would write a price_history row on every poll). Merges
+     each seat's current status in, so a hold another customer takes appears
+     here within a few seconds. */
+  const syncStatuses = useCallback(async () => {
+    try {
+      const d = await apiFetch<{
+        seats: { seatId: number; status: Seat['status'] }[];
+        myHeldSeatIds: number[];
+        holdExpiresAt: string | null;
+      }>(`/shows/${id}/hold`);
+
+      const statusById = new Map(d.seats.map((x) => [x.seatId, x.status]));
+      setData((prev) =>
+        prev
+          ? { ...prev, seats: prev.seats.map((st) => ({ ...st, status: statusById.get(st.seatId) ?? st.status })) }
+          : prev
+      );
+
+      // the server is the source of truth for what we hold
+      setSelected(d.myHeldSeatIds);
+      setHoldExpiresAt(d.holdExpiresAt);
+    } catch {
+      /* polling must never break the page */
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (!user) return;
+    void syncStatuses();
+    const t = setInterval(syncStatuses, 7000);
+    return () => clearInterval(t);
+  }, [user, syncStatuses]);
+
   /* If the user picks seats and then leaves without booking, that is an
      abandoned checkout — a strong demand signal in the pricing model. */
   const selectedRef = useRef<number[]>([]);
@@ -77,6 +114,19 @@ export default function SeatMapPage() {
           eventType: 'abandoned_checkout',
           data: { showId: Number(id), seatIds: selectedRef.current, stepReached: 'seats_selected' },
         });
+        // hand the seats back rather than making everyone wait for expiry.
+        // keepalive so the request still goes out as the page unloads.
+        try {
+          void fetch(`/api/shows/${id}/hold`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seatIds: selectedRef.current }),
+            credentials: 'include',
+            keepalive: true,
+          }).catch(() => {});
+        } catch {
+          /* best effort */
+        }
       }
     };
   }, [id]);
@@ -85,6 +135,21 @@ export default function SeatMapPage() {
     const m = new Map<number, Seat>();
     data?.seats.forEach((s) => m.set(s.seatId, s));
     return m;
+  }, [data]);
+
+  /* Counters derived from the live seat array, so they stay correct as holds
+     appear and disappear during polling (data.stats is only a load-time snapshot). */
+  const liveStats = useMemo(() => {
+    const seats = data?.seats ?? [];
+    const booked = seats.filter((x) => x.status === 'BOOKED').length;
+    const held = seats.filter((x) => x.status === 'HELD').length;
+    return {
+      total: seats.length,
+      available: seats.filter((x) => x.status === 'AVAILABLE').length,
+      held,
+      booked,
+      occupancy: seats.length ? (booked + held) / seats.length : 0,
+    };
   }, [data]);
 
   const selectedSeats = selected.map((sid) => seatsById.get(sid)).filter(Boolean) as Seat[];
@@ -108,16 +173,60 @@ export default function SeatMapPage() {
     }));
   }, [data]);
 
-  function toggleSeat(seat: Seat) {
-    if (seat.status !== 'AVAILABLE') return;
+  /* Selecting a seat takes a real, exclusive hold in the database, so the
+     seat immediately shows as unavailable to everyone else. Deselecting, or
+     leaving the page, hands it straight back. */
+  async function toggleSeat(seat: Seat) {
+    if (!user) {
+      router.push(`/login?next=/shows/${id}`);
+      return;
+    }
+
+    const isMine = selected.includes(seat.seatId);
+    if (!isMine && seat.status !== 'AVAILABLE') return;
+    if (!isMine && selected.length >= MAX_SEATS) return;
+
     setBookErr(null);
-    setSelected((prev) =>
-      prev.includes(seat.seatId)
-        ? prev.filter((x) => x !== seat.seatId)
-        : prev.length >= MAX_SEATS
-          ? prev
-          : [...prev, seat.seatId]
-    );
+    setHoldingSeat(seat.seatId);
+
+    try {
+      if (isMine) {
+        await apiFetch(`/shows/${id}/hold`, { method: 'DELETE', body: { seatIds: [seat.seatId] } });
+        setSelected((prev) => prev.filter((x) => x !== seat.seatId));
+        setData((prev) =>
+          prev
+            ? {
+                ...prev,
+                seats: prev.seats.map((st) =>
+                  st.seatId === seat.seatId ? { ...st, status: 'AVAILABLE' as const } : st
+                ),
+              }
+            : prev
+        );
+      } else {
+        const res = await apiFetch<{ holdExpiresAt: string | null }>(`/shows/${id}/hold`, {
+          method: 'POST',
+          body: { seatIds: [seat.seatId] },
+        });
+        setSelected((prev) => [...prev, seat.seatId]);
+        setHoldExpiresAt(res.holdExpiresAt);
+        setData((prev) =>
+          prev
+            ? {
+                ...prev,
+                seats: prev.seats.map((st) =>
+                  st.seatId === seat.seatId ? { ...st, status: 'HELD' as const } : st
+                ),
+              }
+            : prev
+        );
+      }
+    } catch (e: any) {
+      setBookErr(e.message);
+      void syncStatuses(); // someone beat us to it — show the truth
+    } finally {
+      setHoldingSeat(null);
+    }
   }
 
   async function confirmBooking() {
@@ -188,7 +297,7 @@ export default function SeatMapPage() {
     );
   }
 
-  const soldOut = data.stats.availableSeats === 0;
+  const soldOut = liveStats.available === 0;
   const tierStyle: Record<string, string> = {
     NORMAL: 'border-neon-emerald/40 bg-neon-emerald/10 text-neon-emerald',
     HIGH: 'border-neon-amber/40 bg-neon-amber/10 text-neon-amber',
@@ -242,10 +351,10 @@ export default function SeatMapPage() {
         {/* live stats */}
         <div className="relative mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
           {[
-            { k: data.stats.availableSeats, v: 'Available', c: 'text-neon-emerald' },
-            { k: data.stats.heldSeats, v: 'Held', c: 'text-neon-amber' },
-            { k: data.stats.bookedSeats, v: 'Booked', c: 'text-neon-pink' },
-            { k: `${Math.round(data.pricing.occupancyRate * 100)}%`, v: 'Occupancy', c: 'text-neon-cyan' },
+            { k: liveStats.available, v: 'Available', c: 'text-neon-emerald' },
+            { k: liveStats.held, v: 'Held', c: 'text-neon-amber' },
+            { k: liveStats.booked, v: 'Booked', c: 'text-neon-pink' },
+            { k: `${Math.round(liveStats.occupancy * 100)}%`, v: 'Occupancy', c: 'text-neon-cyan' },
           ].map((s) => (
             <div key={s.v} className="rounded-xl bg-white/5 px-4 py-3">
               <p className={`font-display text-2xl font-bold ${s.c}`}>{s.k}</p>
@@ -303,8 +412,12 @@ export default function SeatMapPage() {
                               <button
                                 key={seat.seatId}
                                 onClick={() => toggleSeat(seat)}
-                                disabled={seat.status !== 'AVAILABLE'}
-                                title={`${seat.section} ${seat.rowNumber}${seat.seatNumber} — ${inr(seat.price)} (${seat.status})`}
+                                disabled={(!isSel && seat.status !== 'AVAILABLE') || holdingSeat === seat.seatId}
+                                title={
+                                  isSel
+                                    ? `${seat.section} ${seat.rowNumber}${seat.seatNumber} — held by you, click to release`
+                                    : `${seat.section} ${seat.rowNumber}${seat.seatNumber} — ${inr(seat.price)} (${seat.status})`
+                                }
                                 aria-label={`Seat ${seat.rowNumber}${seat.seatNumber}, ${seat.status}`}
                                 className={`${base} ${cls}`}
                               >
@@ -410,10 +523,13 @@ export default function SeatMapPage() {
 
                 {selectedSeats.length === 0 ? (
                   <p className="mt-3 text-sm text-slate-500">
-                    Pick up to {MAX_SEATS} seats from the map to see the price breakdown.
+                    Pick up to {MAX_SEATS} seats from the map. Selecting one holds it for you, so nobody else can take
+                    it while you decide.
                   </p>
                 ) : (
                   <>
+                    {holdExpiresAt && <HoldCountdown until={holdExpiresAt} onExpire={() => void syncStatuses()} />}
+
                     <ul className="mt-4 space-y-2">
                       {selectedSeats.map((s) => (
                         <motion.li
@@ -465,8 +581,11 @@ export default function SeatMapPage() {
                     )}
 
                     <p className="mt-3 text-[0.68rem] leading-relaxed text-slate-500">
-                      Seats are locked with <code className="text-neon-violet">SELECT … FOR UPDATE</code> inside a
-                      transaction, so two people can never buy the same seat.
+                      Your seats are held in the database with{' '}
+                      <code className="text-neon-violet">status = &apos;HELD&apos;</code> until the timer runs out.
+                      Booking then locks the rows with{' '}
+                      <code className="text-neon-violet">SELECT … FOR UPDATE</code> inside a transaction, so two people
+                      can never buy the same seat.
                     </p>
                   </>
                 )}
@@ -475,6 +594,50 @@ export default function SeatMapPage() {
           </AnimatePresence>
         </aside>
       </div>
+    </div>
+  );
+}
+
+/** Live countdown on the caller's seat hold. */
+function HoldCountdown({ until, onExpire }: { until: string; onExpire: () => void }) {
+  const [left, setLeft] = useState(() => new Date(until).getTime() - Date.now());
+
+  useEffect(() => {
+    setLeft(new Date(until).getTime() - Date.now());
+    const t = setInterval(() => {
+      const ms = new Date(until).getTime() - Date.now();
+      setLeft(ms);
+      if (ms <= 0) onExpire();
+    }, 1000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [until]);
+
+  if (left <= 0) {
+    return (
+      <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+        Your hold expired — those seats are back in the pool.
+      </p>
+    );
+  }
+
+  const mins = Math.floor(left / 60000);
+  const secs = Math.floor((left % 60000) / 1000);
+  const urgent = left < 60000;
+
+  return (
+    <div
+      className={`mt-3 rounded-lg border px-3 py-2 text-xs ${
+        urgent
+          ? 'border-neon-pink/40 bg-neon-pink/10 text-neon-pink'
+          : 'border-neon-amber/30 bg-neon-amber/10 text-neon-amber'
+      }`}
+    >
+      Held for you —{' '}
+      <span className="font-mono font-semibold">
+        {mins}:{String(secs).padStart(2, '0')}
+      </span>{' '}
+      remaining
     </div>
   );
 }
