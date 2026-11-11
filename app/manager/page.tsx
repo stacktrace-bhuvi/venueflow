@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { apiFetch, inr } from '@/lib/api';
 import Protected from '@/components/Protected';
+import PricingPanel from '@/components/manager/PricingPanel';
+import SeatingPanel from '@/components/manager/SeatingPanel';
 
 type VenueSummary = {
   venueId: number;
@@ -57,7 +59,7 @@ function CapacityTag({ pct }: { pct: number }) {
   );
 }
 
-function ManagerInner() {
+function OverviewTab() {
   const [venues, setVenues] = useState<VenueSummary[]>([]);
   const [shows, setShows] = useState<ShowOccupancy[]>([]);
   const [loading, setLoading] = useState(true);
@@ -82,16 +84,6 @@ function ManagerInner() {
 
   return (
     <div className="space-y-9">
-      <div>
-        <h1 className="font-display text-4xl font-bold">
-          Manager <span className="text-gradient">dashboard</span>
-        </h1>
-        <p className="mt-1.5 text-sm text-slate-400">
-          Built on the <code className="text-neon-violet">manager_dashboard_view</code> and{' '}
-          <code className="text-neon-violet">show_occupancy_view</code> SQL views.
-        </p>
-      </div>
-
       {error && <div className="glass rounded-2xl border-red-500/30 p-5 text-sm text-red-300">{error}</div>}
 
       {/* KPI row — hero numbers in primary ink, labels muted */}
@@ -210,6 +202,49 @@ function ManagerInner() {
           </table>
         </div>
       </section>
+    </div>
+  );
+}
+
+const TABS = [
+  { key: 'overview', label: 'Overview', blurb: 'Built on the manager_dashboard_view and show_occupancy_view SQL views.' },
+  { key: 'pricing', label: 'Pricing control', blurb: 'Set the floor, ceiling and demand weights used by calculate_dynamic_price.' },
+  { key: 'seating', label: 'Seating', blurb: 'Create seating tiers and generate their physical seats.' },
+] as const;
+
+function ManagerInner() {
+  const [tab, setTab] = useState<(typeof TABS)[number]['key']>('overview');
+  const active = TABS.find((t) => t.key === tab)!;
+
+  return (
+    <div className="space-y-7">
+      <div>
+        <h1 className="font-display text-4xl font-bold">
+          Manager <span className="text-gradient">console</span>
+        </h1>
+        <p className="mt-1.5 text-sm text-slate-400">{active.blurb}</p>
+      </div>
+
+      <div className="flex gap-1 border-b border-white/8">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`relative px-4 py-2.5 text-sm font-semibold transition ${
+              tab === t.key ? 'text-white' : 'text-slate-500 hover:text-slate-300'
+            }`}
+          >
+            {t.label}
+            {tab === t.key && (
+              <motion.span layoutId="manager-tab" className="absolute inset-x-0 -bottom-px h-0.5 bg-neon-violet" />
+            )}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'overview' && <OverviewTab />}
+      {tab === 'pricing' && <PricingPanel />}
+      {tab === 'seating' && <SeatingPanel />}
     </div>
   );
 }
