@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { apiFetch, inr, track } from '@/lib/api';
+import { apiFetch, inr, posterSrc, track } from '@/lib/api';
 
 type Show = {
   id: number;
@@ -26,6 +26,7 @@ type EventDetail = {
   artist: string | null;
   genre: string | null;
   durationMinutes: number | null;
+  posterUrl: string | null;
   isActive: boolean;
   organizer: { name: string; email: string };
   shows: Show[];
@@ -89,7 +90,20 @@ export default function EventDetailPage() {
         animate={{ opacity: 1, y: 0 }}
         className="glass relative overflow-hidden rounded-3xl p-8 sm:p-10"
       >
-        <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-neon-violet/25 blur-[90px]" />
+        {event.posterUrl ? (
+          <>
+            {/* poster backdrop — dimmed hard so the headline stays readable */}
+            <img
+              src={posterSrc(event.posterUrl, 1600)}
+              alt=""
+              aria-hidden
+              className="absolute inset-0 h-full w-full object-cover opacity-40"
+            />
+            <div className="absolute inset-0 bg-gradient-to-r from-ink-950 via-ink-950/85 to-ink-950/40" />
+          </>
+        ) : (
+          <div className="absolute -right-16 -top-16 h-56 w-56 rounded-full bg-neon-violet/25 blur-[90px]" />
+        )}
         <div className="relative">
           <div className="flex flex-wrap items-center gap-2">
             {event.genre && (
